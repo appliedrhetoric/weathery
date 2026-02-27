@@ -35,7 +35,7 @@ A responsive, client-side weather dashboard that pulls live hourly forecast data
 ## Setup
 
 ```bash
-git clone https://github.com/youruser/weathery.git
+git clone https://github.com/appliedrhetoric/weathery.git
 cd weathery
 npm install
 ```
