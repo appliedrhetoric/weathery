@@ -13,6 +13,22 @@ const STORAGE_KEY = "nws-dashboard-location";
 const DAY_NAMES = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const formatDate = d => `${DAY_NAMES[d.getDay()]} ${MONTH_NAMES[d.getMonth()]} ${d.getDate()}`;
+const AIRNOW_KEY = import.meta.env.VITE_AIRNOW_KEY || "";
+
+// EPA AQI category colors (official)
+const AQI_COLORS = [
+  { max: 50,  bg: "#00e400", fg: "#000" },  // Good
+  { max: 100, bg: "#ffff00", fg: "#000" },  // Moderate
+  { max: 150, bg: "#ff7e00", fg: "#000" },  // USG
+  { max: 200, bg: "#ff0000", fg: "#fff" },  // Unhealthy
+  { max: 300, bg: "#8f3f97", fg: "#fff" },  // Very Unhealthy
+  { max: 500, bg: "#7e0023", fg: "#fff" },  // Hazardous
+];
+function aqiStyle(aqi) {
+  if (aqi == null) return null;
+  const c = AQI_COLORS.find(c => aqi <= c.max) || AQI_COLORS[AQI_COLORS.length - 1];
+  return { bg: c.bg, fg: c.fg };
+}
 
 const dirLabel = deg => {
   if (deg == null) return "";
@@ -170,6 +186,43 @@ async function fetchWeatherData(lat, lon) {
   });
 
   return { periods, location: pointsData.properties.relativeLocation.properties, lat, lon };
+}
+
+// ── AirNow AQI fetching ──
+async function fetchAqiData(lat, lon) {
+  if (!AIRNOW_KEY) return null;
+  try {
+    // Fetch current observations and forecast in parallel
+    const base = "https://www.airnowapi.org/aq";
+    const params = `latitude=${lat}&longitude=${lon}&distance=25&API_KEY=${AIRNOW_KEY}&format=application/json`;
+    const [currentRes, forecastRes] = await Promise.all([
+      fetch(`${base}/observation/latLong/current/?${params}`),
+      fetch(`${base}/forecast/latLong/?${params}`),
+    ]);
+
+    const current = currentRes.ok ? await currentRes.json() : [];
+    const forecast = forecastRes.ok ? await forecastRes.json() : [];
+
+    // Current: take max AQI across pollutants
+    const currentMax = current.length
+      ? current.reduce((best, obs) => (obs.AQI > (best?.AQI ?? -1) ? obs : best), null)
+      : null;
+
+    // Forecast: group by date, take max AQI per day
+    const forecastByDate = {};
+    forecast.forEach(f => {
+      const d = f.DateForecast?.trim();
+      if (!d) return;
+      if (!forecastByDate[d] || f.AQI > forecastByDate[d].AQI) {
+        forecastByDate[d] = f;
+      }
+    });
+
+    return { current: currentMax, forecastByDate };
+  } catch (e) {
+    console.warn("AirNow fetch failed:", e);
+    return null;
+  }
 }
 
 // ── Metric definitions ──
@@ -410,6 +463,7 @@ function RadarPanel({ lat, lon }) {
 // ── Main ──
 export default function WeatherDashboard() {
   const [data, setData] = useState(null);
+  const [aqiData, setAqiData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedDay, setSelectedDay] = useState(null);
@@ -449,9 +503,13 @@ export default function WeatherDashboard() {
       setData(null);
     }
     try {
-      const d = await fetchWeatherData(lat, lon);
+      const [d, aqi] = await Promise.all([
+        fetchWeatherData(lat, lon),
+        fetchAqiData(lat, lon),
+      ]);
       if (geoLabel) d.geoLabel = geoLabel;
       setData(d);
+      setAqiData(aqi);
       setCurrentQuery(query);
       saveLocation(lat, lon, query, geoLabel);
       // Restore day selection on initial load (not auto-refresh)
@@ -476,9 +534,13 @@ export default function WeatherDashboard() {
     savedDayDate.current = null;
     try {
       const geo = await geocodeLocation(q);
-      const d = await fetchWeatherData(geo.lat, geo.lon);
+      const [d, aqi] = await Promise.all([
+        fetchWeatherData(geo.lat, geo.lon),
+        fetchAqiData(geo.lat, geo.lon),
+      ]);
       d.geoLabel = geo.displayName;
       setData(d);
+      setAqiData(aqi);
       setCurrentQuery(q);
       saveLocation(geo.lat, geo.lon, q, geo.displayName);
     } catch (e) {
@@ -538,6 +600,9 @@ export default function WeatherDashboard() {
       dayMap[key].hours.push(h);
     });
     const days = Object.values(dayMap).sort((a, b) => a.date - b.date);
+    const today = new Date();
+    const todayKey = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+
     days.forEach(d => {
       const temps = d.hours.map(h => h.temp);
       const pops = d.hours.map(h => h.pop ?? 0);
@@ -547,10 +612,27 @@ export default function WeatherDashboard() {
       d.totalQpf = d.hours.reduce((s, h) => s + (h.qpf || 0), 0);
       const mid = d.hours.find(h => h.hour === 12) || d.hours[Math.floor(d.hours.length / 2)];
       d.icon = mid.icon;
+
+      // AQI: use current obs for today, forecast for other days
+      d.aqi = null;
+      d.aqiCategory = null;
+      if (aqiData) {
+        const dKey = `${d.date.getFullYear()}-${String(d.date.getMonth()+1).padStart(2,'0')}-${String(d.date.getDate()).padStart(2,'0')}`;
+        if (dKey === todayKey && aqiData.current) {
+          d.aqi = aqiData.current.AQI;
+          d.aqiCategory = aqiData.current.Category?.Name || null;
+        } else if (aqiData.forecastByDate) {
+          const fc = aqiData.forecastByDate[dKey];
+          if (fc) {
+            d.aqi = fc.AQI;
+            d.aqiCategory = fc.Category?.Name || null;
+          }
+        }
+      }
     });
     const viewHours = selectedDay !== null ? days[selectedDay]?.hours || [] : data.periods;
     return { days, viewHours };
-  }, [data, selectedDay]);
+  }, [data, selectedDay, aqiData]);
 
   // Build chart config with layered axes
   const chartConfig = useMemo(() => {
@@ -799,7 +881,7 @@ export default function WeatherDashboard() {
         .nws-metric-btns { display: flex; gap: 6px; flex-wrap: wrap; }
         .nws-metric-btn { padding: 7px 16px; font-size: 12px; }
         .nws-chart-wrap { height: 260px; }
-        .nws-stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+        .nws-stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
         .nws-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
         .nws-table { font-size: 12px; }
         .nws-table td, .nws-table th { padding: 6px 8px; }
@@ -815,6 +897,7 @@ export default function WeatherDashboard() {
           .nws-day-label-dow { font-size: 10px !important; }
           .nws-day-label-date { font-size: 11px !important; margin-bottom: 3px !important; }
           .nws-day-pop { font-size: 10px !important; }
+          .nws-day-aqi > div { width: 14px !important; height: 14px !important; font-size: 7px !important; }
           .nws-alldays-btn { padding: 8px 12px !important; font-size: 11px !important; }
           .nws-metric-btns { gap: 4px; }
           .nws-metric-btn { padding: 6px 12px; font-size: 11px; }
@@ -867,6 +950,21 @@ export default function WeatherDashboard() {
               <div className="nws-day-icon">{d.icon.icon}</div>
               <div className="nws-day-temp" style={{ fontWeight: 600, color: "#f1f5f9" }}>{d.hi}° <span style={{ color: "#64748b", fontWeight: 400 }}>{d.lo}°</span></div>
               {d.maxPop > 10 && <div className="nws-day-pop" style={{ fontSize: 11, color: "#60a5fa", marginTop: 3 }}>💧 {d.maxPop}%</div>}
+              {d.aqi != null && (() => {
+                const s = aqiStyle(d.aqi);
+                return s ? (
+                  <div className="nws-day-aqi" style={{ marginTop: 4, display: "flex", justifyContent: "center" }}>
+                    <div style={{
+                      width: 16, height: 16, borderRadius: "50%",
+                      background: s.bg, color: s.fg,
+                      border: `1.5px solid rgba(255,255,255,0.35)`,
+                      fontSize: 8, fontWeight: 700,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      lineHeight: 1,
+                    }}>{d.aqi > 0 ? d.aqi : ""}</div>
+                  </div>
+                ) : null;
+              })()}
             </button>
           ))}
         </div>
@@ -927,6 +1025,10 @@ export default function WeatherDashboard() {
           const scopePops = scope.map(h => h.pop ?? 0);
           const scopeQpf = scope.reduce((s, h) => s + (h.qpf || 0), 0);
           const scopeWind = scope.map(h => h.windSpeed);
+          // Get AQI for the summary: day view uses that day's AQI, week uses current
+          const aqiVal = isDay ? days[selectedDay].aqi : (aqiData?.current?.AQI ?? null);
+          const aqiCat = isDay ? days[selectedDay].aqiCategory : (aqiData?.current?.Category?.Name ?? null);
+          const aqiStat = aqiVal != null ? { label: "Air Quality", value: aqiVal, aqiVal, aqiCat } : null;
           const stats = isDay ? [
             { label: formatDate(days[selectedDay].date), value: days[selectedDay].icon.icon + " " + days[selectedDay].icon.label },
             { label: "Hi / Lo", value: `${Math.max(...scopeTemps)}° / ${Math.min(...scopeTemps)}°F` },
@@ -939,14 +1041,32 @@ export default function WeatherDashboard() {
             { label: "Peak Rain Chance", value: `${Math.max(...scopePops)}%` },
             { label: "Total Precip Est.", value: `${scopeQpf.toFixed(2)} in` },
           ];
+          if (aqiStat) stats.push(aqiStat);
           return (
             <div className="nws-stats-grid">
-              {stats.map((s, i) => (
-                <div key={i} className="nws-stat-box" style={{ background: "rgba(30,41,59,0.5)", borderRadius: 10, border: "1px solid rgba(148,163,184,0.08)", padding: "14px 16px" }}>
-                  <div className="nws-stat-label" style={{ fontSize: 11, color: "#64748b", fontWeight: 600, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>{s.label}</div>
-                  <div className="nws-stat-value" style={{ fontSize: 16, fontWeight: 600, color: "#e2e8f0" }}>{s.value}</div>
-                </div>
-              ))}
+              {stats.map((s, i) => {
+                const isAqi = s.aqiVal != null;
+                const aStyle = isAqi ? aqiStyle(s.aqiVal) : null;
+                return (
+                  <div key={i} className="nws-stat-box" style={{ background: "rgba(30,41,59,0.5)", borderRadius: 10, border: "1px solid rgba(148,163,184,0.08)", padding: "12px 12px" }}>
+                    <div className="nws-stat-label" style={{ fontSize: 11, color: "#64748b", fontWeight: 600, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>{s.label}</div>
+                    {isAqi ? (
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{
+                          width: 24, height: 24, borderRadius: "50%",
+                          background: aStyle?.bg, color: aStyle?.fg,
+                          border: "1.5px solid rgba(255,255,255,0.35)",
+                          fontSize: 10, fontWeight: 700,
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                        }}>{s.aqiVal > 0 ? s.aqiVal : ""}</div>
+                        <span style={{ fontSize: 13, fontWeight: 500, color: "#cbd5e1" }}>{s.aqiCat || ""}</span>
+                      </div>
+                    ) : (
+                      <div className="nws-stat-value" style={{ fontSize: 16, fontWeight: 600, color: "#e2e8f0" }}>{s.value}</div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           );
         })()}
