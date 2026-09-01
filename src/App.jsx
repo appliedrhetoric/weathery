@@ -189,6 +189,10 @@ async function fetchWeatherData(lat, lon) {
 }
 
 // ── AirNow AQI fetching ──
+// Uses the web services AirNow released June 2026. The endpoints this replaced
+// (/observation/latLong/current/ and /forecast/latLong/) retire 2026-09-30.
+// Both responses are normalized to { aqi, category } so the rest of the app
+// doesn't depend on AirNow's field naming.
 async function fetchAqiData(lat, lon) {
   if (!AIRNOW_KEY) return null;
   try {
@@ -196,25 +200,31 @@ async function fetchAqiData(lat, lon) {
     const base = "https://www.airnowapi.org/aq";
     const params = `latitude=${lat}&longitude=${lon}&distance=25&API_KEY=${AIRNOW_KEY}&format=application/json`;
     const [currentRes, forecastRes] = await Promise.all([
-      fetch(`${base}/observation/latLong/current/?${params}`),
-      fetch(`${base}/forecast/latLong/?${params}`),
+      fetch(`${base}/observation/current/ziplatlong/?${params}`),
+      fetch(`${base}/forecast/current/?${params}`),
     ]);
 
-    const current = currentRes.ok ? await currentRes.json() : [];
-    const forecast = forecastRes.ok ? await forecastRes.json() : [];
+    // Where the retired services returned [] for a location with no data, these
+    // return {"WebServiceError":[...]} with HTTP 200, so coerce to an array.
+    const rows = v => (Array.isArray(v) ? v : []);
+    const current = rows(currentRes.ok ? await currentRes.json() : []);
+    const forecast = rows(forecastRes.ok ? await forecastRes.json() : []);
 
     // Current: take max AQI across pollutants
-    const currentMax = current.length
-      ? current.reduce((best, obs) => (obs.AQI > (best?.AQI ?? -1) ? obs : best), null)
-      : null;
+    const currentMax = current.reduce(
+      (best, obs) => (obs.nowcastAQI > (best?.aqi ?? -1)
+        ? { aqi: obs.nowcastAQI, category: obs.aqiCategoryName || null }
+        : best),
+      null
+    );
 
     // Forecast: group by date, take max AQI per day
     const forecastByDate = {};
     forecast.forEach(f => {
-      const d = f.DateForecast?.trim();
+      const d = f.dateValid?.trim();
       if (!d) return;
-      if (!forecastByDate[d] || f.AQI > forecastByDate[d].AQI) {
-        forecastByDate[d] = f;
+      if (!forecastByDate[d] || f.aqi > forecastByDate[d].aqi) {
+        forecastByDate[d] = { aqi: f.aqi, category: f.categoryName || null };
       }
     });
 
@@ -619,13 +629,13 @@ export default function WeatherDashboard() {
       if (aqiData) {
         const dKey = `${d.date.getFullYear()}-${String(d.date.getMonth()+1).padStart(2,'0')}-${String(d.date.getDate()).padStart(2,'0')}`;
         if (dKey === todayKey && aqiData.current) {
-          d.aqi = aqiData.current.AQI;
-          d.aqiCategory = aqiData.current.Category?.Name || null;
+          d.aqi = aqiData.current.aqi;
+          d.aqiCategory = aqiData.current.category;
         } else if (aqiData.forecastByDate) {
           const fc = aqiData.forecastByDate[dKey];
           if (fc) {
-            d.aqi = fc.AQI;
-            d.aqiCategory = fc.Category?.Name || null;
+            d.aqi = fc.aqi;
+            d.aqiCategory = fc.category;
           }
         }
       }
@@ -1026,8 +1036,8 @@ export default function WeatherDashboard() {
           const scopeQpf = scope.reduce((s, h) => s + (h.qpf || 0), 0);
           const scopeWind = scope.map(h => h.windSpeed);
           // Get AQI for the summary: day view uses that day's AQI, week uses current
-          const aqiVal = isDay ? days[selectedDay].aqi : (aqiData?.current?.AQI ?? null);
-          const aqiCat = isDay ? days[selectedDay].aqiCategory : (aqiData?.current?.Category?.Name ?? null);
+          const aqiVal = isDay ? days[selectedDay].aqi : (aqiData?.current?.aqi ?? null);
+          const aqiCat = isDay ? days[selectedDay].aqiCategory : (aqiData?.current?.category ?? null);
           const aqiStat = aqiVal != null ? { label: "Air Quality", value: aqiVal, aqiVal, aqiCat } : null;
           const stats = isDay ? [
             { label: formatDate(days[selectedDay].date), value: days[selectedDay].icon.icon + " " + days[selectedDay].icon.label },
