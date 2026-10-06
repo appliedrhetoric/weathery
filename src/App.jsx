@@ -466,7 +466,7 @@ function RadarPanel({ lat, lon }) {
       </div>
 
       <div style={{ padding: "0 16px 10px", fontSize: 10, color: "#475569" }}>
-        Data: RainViewer.com
+        Weather data by <a href="https://www.rainviewer.com/" target="_blank" rel="noopener noreferrer" style={{ color: "#64748b" }}>RainViewer</a>
       </div>
     </div>
   );

@@ -11,6 +11,7 @@ A responsive, client-side weather dashboard that pulls live hourly forecast data
 - **Day detail view** — select any day for an hourly breakdown table (card layout on mobile)
 - **Context-sensitive summary stats** — aggregated for the week or the selected day
 - **Precipitation radar** — animated RainViewer radar loop with play/pause and scrubber
+- **Air quality** — current AQI and daily AQI forecast from [AirNow](https://www.airnow.gov/) on the day tiles
 - **Location search** — enter any US city, state, or ZIP code (geocoded via [Nominatim](https://nominatim.openstreetmap.org/))
 - **Persistent state** — last location, selected day, and active metrics survive page refreshes (localStorage)
 - **Auto-refresh** — forecast data reloads silently every hour
@@ -24,8 +25,9 @@ A responsive, client-side weather dashboard that pulls live hourly forecast data
 | [api.weather.gov](https://api.weather.gov) | Hourly forecast, grid data (QPF, cloud cover, wind gusts) | None (free, public) |
 | [Nominatim / OpenStreetMap](https://nominatim.org) | Geocoding (city/ZIP → lat/lon) | None (free for light use) |
 | [RainViewer](https://www.rainviewer.com/api.html) | Precipitation radar tiles | None (free tier, max zoom 7) |
+| [AirNow](https://docs.airnowapi.org/) | Current and forecast AQI | API key (`VITE_AIRNOW_KEY`) |
 | [Leaflet.js](https://leafletjs.com) | Map rendering for radar panel | Loaded from CDN at runtime |
-| [CartoDB](https://carto.com/basemaps) | Dark basemap tiles | None |
+| [CARTO](https://carto.com/basemaps) | Dark basemap tiles | API key (`VITE_CARTO_KEY`), free for non-commercial use |
 
 ## Prerequisites
 
@@ -39,6 +41,20 @@ git clone https://github.com/appliedrhetoric/weathery.git
 cd weathery
 npm install
 ```
+
+Create a `.env` file in the project root with your API keys (it is git-ignored):
+
+```bash
+VITE_AIRNOW_KEY=your-airnow-key
+VITE_CARTO_KEY=your-carto-key
+```
+
+- AirNow: request a key at [docs.airnowapi.org](https://docs.airnowapi.org/)
+- CARTO: request a key at [carto.com/basemaps/apikey](https://carto.com/basemaps/apikey)
+
+Vite bakes these into the bundle at build time, so rebuild after changing them. A missing key does not break the build: without `VITE_AIRNOW_KEY` the AQI display is hidden, and without `VITE_CARTO_KEY` the radar basemap shows CARTO's "API KEY REQUIRED" placeholder tiles.
+
+If you copy the project to a machine with a different CPU architecture (e.g. Intel to Apple Silicon), delete `node_modules` and run `npm ci`; Vite's esbuild and Rollup binaries are platform-specific.
 
 ## Development
 
@@ -79,7 +95,7 @@ server {
 }
 ```
 
-All API calls are made client-side from the browser — no backend, proxy, or API keys required.
+All API calls are made client-side from the browser — no backend or proxy required. Because of that, the AirNow and CARTO keys are visible in the page source; restrict them to your domain where the provider allows it.
 
 ## Project Structure
 
@@ -107,6 +123,12 @@ weathery/
 - The free API tier provides past radar data only (no satellite imagery, no nowcast)
 - Maximum tile zoom level is 7
 - Radar data covers approximately the last 2 hours in 10-minute intervals
+- Attribution with a link to rainviewer.com is required under the free terms
+
+## CARTO Notes
+
+- Basemap tiles require a key (`?key=`) as of 2026; free up to 5M requests/month for non-commercial use
+- Attribution "© OpenStreetMap contributors, © CARTO" must be visible on the map; the app shows it via Leaflet's attribution control
 
 ## License
 
