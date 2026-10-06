@@ -14,6 +14,7 @@ const DAY_NAMES = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const formatDate = d => `${DAY_NAMES[d.getDay()]} ${MONTH_NAMES[d.getMonth()]} ${d.getDate()}`;
 const AIRNOW_KEY = import.meta.env.VITE_AIRNOW_KEY || "";
+const CARTO_KEY = import.meta.env.VITE_CARTO_KEY || "";
 
 // EPA AQI category colors (official)
 const AQI_COLORS = [
@@ -340,11 +341,12 @@ function RadarPanel({ lat, lon }) {
       zoom: 7,
       maxZoom: 7,
       zoomControl: true,
-      attributionControl: false,
+      attributionControl: true,
     });
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    L.tileLayer(`https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}{r}.png?key=${CARTO_KEY}`, {
       subdomains: "abcd",
       maxZoom: 7,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, &copy; <a href="https://carto.com/attribution/">CARTO</a>',
     }).addTo(map);
     mapInstanceRef.current = map;
     return () => { map.remove(); mapInstanceRef.current = null; };
@@ -882,6 +884,8 @@ export default function WeatherDashboard() {
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
       <style>{`
         .nws-wrap { max-width: 980px; margin-left: auto; margin-right: auto; }
+        .nws-radar-map .leaflet-control-attribution { background: rgba(15,23,42,0.75); color: #94a3b8; }
+        .nws-radar-map .leaflet-control-attribution a { color: #cbd5e1; }
         .nws-header-title { font-size: 26px; }
         .nws-header-coords { font-size: 13px; }
         .nws-day-cards { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; -webkit-overflow-scrolling: touch; }
